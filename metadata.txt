@@ -1,0 +1,7 @@
+[general]
+name=Image Feature Creator
+description=Creating Features by EXIF coordinates
+author=Daniel Seisenbacher
+icon=icon.svg
+version=1.0
+homepage=""
