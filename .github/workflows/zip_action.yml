@@ -1,0 +1,24 @@
+name: Create Zip Archive
+
+on:
+  push:
+    branches: [ "main" ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Zip Repository
+        uses: TheDoctor0/zip-release@0.7.6
+        with:
+          filename: qfield-image-based-feature-creation-plugin.zip
+          path: .
+
+      - name: Upload Zip Archive
+        uses: actions/upload-artifact@v4
+        with:
+          name: repository-zip
+          path: qfield-image-based-feature-creation-plugin.zip
