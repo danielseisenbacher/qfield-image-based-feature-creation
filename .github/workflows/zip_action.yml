@@ -1,0 +1,52 @@
+name: Create Zip Archive
+on:
+  push:
+    branches: [ "main" ]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+      
+      - name: Zip Repository
+        uses: TheDoctor0/zip-release@0.7.6
+        with:
+          filename: qfield-image-based-feature-creation-plugin.zip
+          path: .
+          exclusions: '*.git* .git* .github*'
+      
+      - name: Upload Zip Archive
+        uses: actions/upload-artifact@v4
+        with:
+          name: qfield-image-based-feature-creation-plugin.zip
+          path: qfield-image-based-feature-creation-plugin.zip
+      
+      - name: Create/Update Release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: latest
+          name: Latest Build
+          body: |
+            Latest build of the QField Image-Based Feature Creation Plugin
+            
+            Built from commit: ${{ github.sha }}
+            Built on: ${{ github.run_number }}
+          files: qfield-image-based-feature-creation-plugin.zip
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      
+      - name: Commit and Push Zip File
+        run: |
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+          git add qfield-image-based-feature-creation-plugin.zip
+          git diff --staged --quiet || git commit -m "Update zip archive [skip ci]"
+          git push
