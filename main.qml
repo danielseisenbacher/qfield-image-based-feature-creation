@@ -5,27 +5,16 @@ import org.qgis
 import QtQuick.Layouts
 import QtCore
 import Theme
+import "qrc:/qml" as QFieldItems
 
 Item {
   id: plugin
-  property var resourceSource: null
   property var dashBoard: iface.findItemByObjectName('dashBoard')
   property var overlayFeatureFormDrawer: iface.findItemByObjectName('overlayFeatureFormDrawer')
   property string selectedLayer: ""
   property bool isProcessing: false
-  property bool isConnected: false
 
-  onResourceSourceChanged: {
-    iface.logMessage("resourceSource changed to: " + resourceSource)
-    if (resourceSource) {
-      iface.logMessage("Connecting signal via onResourceSourceChanged")
-      resourceSource.resourceReceived.connect(onResourceReceived)
-      isConnected = true
-      iface.logMessage("Signal connected via property watcher")
-    }
-  }
-
-  function createFeatureFromWKT(wkt, targetLayerName){
+  function createFeatureFromWKT(wkt, targetLayerName) {
     iface.logMessage("createFeatureFromWKT called with layer: " + targetLayerName)
     iface.logMessage("WKT: " + wkt)
     let targetLayer = qgisProject.mapLayersByName(targetLayerName)[0]
@@ -36,7 +25,6 @@ Item {
     }
     iface.logMessage("Layer found, creating geometry...")
     let geometry = GeometryUtils.createGeometryFromWkt(wkt)
-    iface.logMessage("Geometry created: " + geometry)
     let feature = FeatureUtils.createFeature(targetLayer, geometry)
     iface.logMessage("Feature created, opening form...")
     dashBoard.activeLayer = targetLayer
@@ -46,38 +34,10 @@ Item {
     iface.logMessage("Feature form opened")
   }
 
-  function buttonClicked(){
-    iface.logMessage("buttonClicked started")
-
-    // Disconnect previous if any
-    if (resourceSource && isConnected) {
-      iface.logMessage("Disconnecting previous resourceSource connection")
-      resourceSource.resourceReceived.disconnect(onResourceReceived)
-      isConnected = false
-    }
-
-    var filepath = "images/img_" + Date.now() + ".jpg"
-    iface.logMessage("Requesting gallery picture, filepath: " + filepath)
-    iface.logMessage("Project home path: " + qgisProject.homePath)
-
-    // Assignment triggers onResourceSourceChanged which connects the signal
-    resourceSource = platformUtilities.getGalleryPicture(qgisProject.homePath + '/', filepath, plugin)
-    iface.logMessage("resourceSource after getGalleryPicture: " + resourceSource)
-    isProcessing = false
-  }
-
-  function onResourceReceived(path) {
-    iface.logMessage("=== onResourceReceived FIRED === path: " + path)
-
-    // Disconnect after receiving
-    if (resourceSource && isConnected) {
-      iface.logMessage("Disconnecting signal after receive")
-      resourceSource.resourceReceived.disconnect(onResourceReceived)
-      isConnected = false
-    }
-
-    if (!path) {
-      iface.logMessage("ERROR: path is empty or null")
+  function processImage(path) {
+    iface.logMessage("=== processImage called with path: " + path + " ===")
+    if (!path || path === "") {
+      iface.logMessage("ERROR: empty path received")
       iface.mainWindow().displayToast(qsTr("No image path received"))
       return
     }
@@ -85,20 +45,18 @@ Item {
     var fullPath = qgisProject.homePath + "/" + path
     iface.logMessage("Full image path: " + fullPath)
 
-    expressionEvaluator.expressionText = "geom_to_wkt( make_point( exif('" + fullPath + "' , 'Exif.GPSInfo.GPSLongitude'), exif('" + fullPath + "' , 'Exif.GPSInfo.GPSLatitude')))"
-    iface.logMessage("Expression set, evaluating...")
-
+    expressionEvaluator.expressionText = "geom_to_wkt( make_point( exif('" + fullPath + "', 'Exif.GPSInfo.GPSLongitude'), exif('" + fullPath + "', 'Exif.GPSInfo.GPSLatitude')))"
+    iface.logMessage("Evaluating EXIF expression...")
     var result = expressionEvaluator.evaluate()
-    iface.logMessage("Expression result: " + result)
+    iface.logMessage("EXIF result: " + result)
 
-    if (result === "" || result === null || result === undefined) {
+    if (!result || result === "") {
       iface.mainWindow().displayToast(qsTr("No Coordinates provided - no EXIF error"))
-      iface.logMessage("No Coordinates provided - EXIF result was empty")
-      iface.logMessage("Full path used for EXIF: " + fullPath)
+      iface.logMessage("EXIF result empty for path: " + fullPath)
       return
     }
 
-    iface.logMessage("Valid result, calling createFeatureFromWKT...")
+    iface.logMessage("Calling createFeatureFromWKT...")
     createFeatureFromWKT(result, selectedLayer || "Schwammerl")
   }
 
@@ -106,18 +64,55 @@ Item {
     iface.logMessage("getLayerNames called")
     var layerTree = dashBoard.layerTree
     let layerNames = []
-
     for (let i = 0; i < layerTree.rowCount(); i++) {
       let index = layerTree.index(i, 0)
       layerNames.push(layerTree.data(index, Qt.DisplayRole))
     }
-    iface.logMessage("Layer names found: " + layerNames.join(", "))
+    iface.logMessage("Layers found: " + layerNames.join(", "))
     return layerNames
   }
 
   ExpressionEvaluator {
     id: expressionEvaluator
     project: qgisProject
+  }
+
+  // Use a Loader + QFieldCamera as per the official qfield-snap pattern.
+  // This avoids the Android Activity lifecycle issue with getGalleryPicture + resourceReceived.
+  // Switch to gallery by setting the camera's mode if supported, otherwise
+  // we fall back to camera and the user takes a geotagged photo directly.
+  Loader {
+    id: cameraLoader
+    active: false
+    sourceComponent: Component {
+      QFieldItems.QFieldCamera {
+        id: qfieldCamera
+        visible: false
+
+        Component.onCompleted: {
+          iface.logMessage("QFieldCamera component created, opening...")
+          open()
+        }
+
+        onFinished: (path) => {
+          iface.logMessage("QFieldCamera onFinished, path: " + path)
+          close()
+          isProcessing = false
+          processImage(path)
+        }
+
+        onCanceled: {
+          iface.logMessage("QFieldCamera canceled")
+          close()
+          isProcessing = false
+        }
+
+        onClosed: {
+          iface.logMessage("QFieldCamera closed, deactivating loader")
+          cameraLoader.active = false
+        }
+      }
+    }
   }
 
   Component.onCompleted: {
@@ -131,19 +126,21 @@ Item {
     iconColor: Theme.mainColor
     bgcolor: Theme.darkGray
     round: true
+
     onClicked: {
       iface.logMessage("Plugin button clicked, selectedLayer: " + selectedLayer)
-      if (selectedLayer == "") {
+      if (selectedLayer === "") {
         iface.logMessage("No layer selected, opening layer selection dialog")
         layerSelectionDialog.open()
       } else {
-        iface.logMessage("Layer already selected: " + selectedLayer + ", proceeding to image picker")
+        iface.logMessage("Opening camera loader for layer: " + selectedLayer)
         isProcessing = true
-        buttonClicked()
+        cameraLoader.active = true
       }
     }
+
     onPressAndHold: {
-      iface.logMessage("Button press and hold, isProcessing: " + isProcessing)
+      iface.logMessage("Button long-pressed, opening layer selection dialog")
       if (!isProcessing) {
         layerSelectionDialog.open()
       }
@@ -186,10 +183,9 @@ Item {
     onAccepted: {
       selectedLayer = comboBoxLayers.currentText
       iface.logMessage("Layer selected: " + selectedLayer)
-      iface.mainWindow().displayToast(qsTr("Layer '%1' chosen for image-based feature creation!").arg(comboBoxLayers.currentText))
-      iface.logMessage("Proceeding to image picker after layer selection")
+      iface.mainWindow().displayToast(qsTr("Layer '%1' chosen for image-based feature creation!").arg(selectedLayer))
       isProcessing = true
-      buttonClicked()
+      cameraLoader.active = true
     }
 
     onRejected: {
