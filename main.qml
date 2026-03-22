@@ -28,12 +28,6 @@ Item {
     overlayFeatureFormDrawer.open()
   }
 
-  function buttonClicked(){
-    var filepath = "images/img_" + Date.now() + ".jpg"
-    resourceSource = platformUtilities.getGalleryPicture(qgisProject.homePath + '/', filepath, plugin)
-    isProcessing = false
-  }
-
   function getImagePath(){
     // Define where to save the selected image
     var prefix = qgisProject.homePath || applicationDirectory
@@ -60,23 +54,33 @@ Item {
     project: qgisProject
   }
 
-  Connections {
-    target: resourceSource
-    function onResourceReceived(path) {
-      if (path) {
-        var fullPath = qgisProject.homePath + "/" + path
-        expressionEvaluator.expressionText = "geom_to_wkt( make_point( exif('" + fullPath + "' , 'Exif.GPSInfo.GPSLongitude'), exif('" + fullPath + "' , 'Exif.GPSInfo.GPSLatitude')))"
-        var result = expressionEvaluator.evaluate()
+  function buttonClicked() {
+    var filepath = "images/img_" + Date.now() + ".jpg"
+    resourceSource = platformUtilities.getGalleryPicture(qgisProject.homePath + '/', filepath, plugin)
+    isProcessing = false
 
-        // safeguard if no EXIF information
-        if (result === "") {
-          iface.mainWindow().displayToast(qsTr("No Coordinates provided - no EXIF error"))
-          iface.logMessage("No Coordinates provided - no EXIF error: \n"+result)
-          iface.logMessage(fullPath)
-          return
-        }
-        createFeatureFromWKT(result, selectedLayer || "Schwammerl")
+    // Manually connect the signal after assignment
+    if (resourceSource) {
+      resourceSource.resourceReceived.connect(function(path) {
+        onResourceReceived(path)
+        resourceSource.resourceReceived.disconnect(arguments.callee)  // disconnect after first call
+      })
+    }
+  }
+
+  function onResourceReceived(path) {
+    if (path) {
+      var fullPath = qgisProject.homePath + "/" + path
+      expressionEvaluator.expressionText = "geom_to_wkt( make_point( exif('" + fullPath + "' , 'Exif.GPSInfo.GPSLongitude'), exif('" + fullPath + "' , 'Exif.GPSInfo.GPSLatitude')))"
+      var result = expressionEvaluator.evaluate()
+      iface.logMessage(result)
+
+      if (result === "") {
+        iface.mainWindow().displayToast(qsTr("No Coordinates provided - no EXIF error"))
+        iface.logMessage("No Coordinates provided - no EXIF error: \n" + result)
+        return
       }
+      createFeatureFromWKT(result, selectedLayer || "Schwammerl")
     }
   }
 
