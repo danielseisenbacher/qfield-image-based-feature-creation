@@ -69,6 +69,8 @@ Item {
   }
 
   function onResourceReceived(path) {
+    iface.logMessage("onRecourceReceived")
+    iface.logMessage(path)
     if (path) {
       var fullPath = qgisProject.homePath + "/" + path
       expressionEvaluator.expressionText = "geom_to_wkt( make_point( exif('" + fullPath + "' , 'Exif.GPSInfo.GPSLongitude'), exif('" + fullPath + "' , 'Exif.GPSInfo.GPSLatitude')))"
