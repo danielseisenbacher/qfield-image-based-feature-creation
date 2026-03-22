@@ -15,6 +15,7 @@ Item {
   property bool isProcessing: false
 
   function createFeatureFromWKT(wkt, targetLayerName){
+    iface.logMessage("createFeatureFromWKT")
     let targetLayer = qgisProject.mapLayersByName(targetLayerName)[0]
     if (!targetLayer) {
       iface.mainWindow().displayToast("No layer called " + targetLayerName + " could be found!")
@@ -55,13 +56,16 @@ Item {
   }
 
   function buttonClicked() {
+    iface.logMessage("buttonClicked")
     var filepath = "images/img_" + Date.now() + ".jpg"
     resourceSource = platformUtilities.getGalleryPicture(qgisProject.homePath + '/', filepath, plugin)
     isProcessing = false
 
     // Manually connect the signal after assignment
     if (resourceSource) {
+      iface.logMessage("Connection established")
       resourceSource.resourceReceived.connect(function(path) {
+        iface.logMessage("Connection established")
         onResourceReceived(path)
         resourceSource.resourceReceived.disconnect(arguments.callee)  // disconnect after first call
       })
@@ -102,8 +106,8 @@ Item {
       }
       else {
         isProcessing = true
+        iface.logMessage("Button Clicked")
         buttonClicked()
-        //getImagePath()
       }
     }
     onPressAndHold: {
