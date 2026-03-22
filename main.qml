@@ -8,12 +8,22 @@ import Theme
 
 Item {
   id: plugin
-  property var resourceSource
+  property var resourceSource: null
   property var dashBoard: iface.findItemByObjectName('dashBoard')
   property var overlayFeatureFormDrawer: iface.findItemByObjectName('overlayFeatureFormDrawer')
   property string selectedLayer: ""
   property bool isProcessing: false
   property bool isConnected: false
+
+  onResourceSourceChanged: {
+    iface.logMessage("resourceSource changed to: " + resourceSource)
+    if (resourceSource) {
+      iface.logMessage("Connecting signal via onResourceSourceChanged")
+      resourceSource.resourceReceived.connect(onResourceReceived)
+      isConnected = true
+      iface.logMessage("Signal connected via property watcher")
+    }
+  }
 
   function createFeatureFromWKT(wkt, targetLayerName){
     iface.logMessage("createFeatureFromWKT called with layer: " + targetLayerName)
@@ -50,23 +60,14 @@ Item {
     iface.logMessage("Requesting gallery picture, filepath: " + filepath)
     iface.logMessage("Project home path: " + qgisProject.homePath)
 
+    // Assignment triggers onResourceSourceChanged which connects the signal
     resourceSource = platformUtilities.getGalleryPicture(qgisProject.homePath + '/', filepath, plugin)
-    isProcessing = false
-
     iface.logMessage("resourceSource after getGalleryPicture: " + resourceSource)
-
-    if (resourceSource) {
-      iface.logMessage("resourceSource is valid, connecting signal...")
-      resourceSource.resourceReceived.connect(onResourceReceived)
-      isConnected = true
-      iface.logMessage("Signal connected successfully")
-    } else {
-      iface.logMessage("ERROR: resourceSource is null or undefined!")
-    }
+    isProcessing = false
   }
 
   function onResourceReceived(path) {
-    iface.logMessage("onResourceReceived fired with path: " + path)
+    iface.logMessage("=== onResourceReceived FIRED === path: " + path)
 
     // Disconnect after receiving
     if (resourceSource && isConnected) {
@@ -132,11 +133,10 @@ Item {
     round: true
     onClicked: {
       iface.logMessage("Plugin button clicked, selectedLayer: " + selectedLayer)
-      if (selectedLayer == ""){
+      if (selectedLayer == "") {
         iface.logMessage("No layer selected, opening layer selection dialog")
-        layerSelectionDialog.open();
-      }
-      else {
+        layerSelectionDialog.open()
+      } else {
         iface.logMessage("Layer already selected: " + selectedLayer + ", proceeding to image picker")
         isProcessing = true
         buttonClicked()
@@ -145,7 +145,7 @@ Item {
     onPressAndHold: {
       iface.logMessage("Button press and hold, isProcessing: " + isProcessing)
       if (!isProcessing) {
-        layerSelectionDialog.open();
+        layerSelectionDialog.open()
       }
     }
   }
@@ -186,7 +186,7 @@ Item {
     onAccepted: {
       selectedLayer = comboBoxLayers.currentText
       iface.logMessage("Layer selected: " + selectedLayer)
-      iface.mainWindow().displayToast(qsTr("Layer '%1' chosen for image-based feature creation!").arg(comboBoxLayers.currentText));
+      iface.mainWindow().displayToast(qsTr("Layer '%1' chosen for image-based feature creation!").arg(comboBoxLayers.currentText))
       iface.logMessage("Proceeding to image picker after layer selection")
       isProcessing = true
       buttonClicked()
