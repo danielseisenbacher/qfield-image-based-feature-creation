@@ -47,6 +47,6 @@ jobs:
         run: |
           git config --local user.email "action@github.com"
           git config --local user.name "GitHub Action"
-          git add qfield-image-based-feature-creation-plugin.zip
+          git add qfield-image-based-feature-creation-plugin.zip -f
           git diff --staged --quiet || git commit -m "Update zip archive [skip ci]"
           git push
