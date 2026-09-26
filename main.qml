@@ -1,118 +1,38 @@
 import QtQuick
 import QtQuick.Controls
-import org.qfield
-import org.qgis
 import QtQuick.Layouts
 import QtCore
+import org.qfield
+import org.qgis
 import Theme
 
+/**
+ * Image based Feature Creation - QField plugin
+ *
+ * Workflow:
+ *  1. Tap the toolbar button (long press to change the target layer).
+ *  2. Pick an image. It is copied into the project's "images" folder.
+ *  3. The GPS position is read from the image's EXIF metadata, reprojected
+ *     into the target layer's CRS, and the "add feature" form opens with
+ *     the new point geometry.
+ */
 Item {
   id: plugin
+
+  readonly property var dashBoard: iface.findItemByObjectName('dashBoard')
+  readonly property var overlayFeatureFormDrawer: iface.findItemByObjectName('overlayFeatureFormDrawer')
+
+  // Folder (relative to the project folder) where picked images are copied to
+  readonly property string imageFolder: "images"
+
+  // Resource source of the pending picker request, null when idle
   property var resourceSource: null
-  property var dashBoard: iface.findItemByObjectName('dashBoard')
-  property var overlayFeatureFormDrawer: iface.findItemByObjectName('overlayFeatureFormDrawer')
-  property string selectedLayer: ""
-  property bool isProcessing: false
-  property bool isConnected: false
 
-  onResourceSourceChanged: {
-    iface.logMessage("resourceSource changed to: " + resourceSource)
-    if (resourceSource) {
-      iface.logMessage("Connecting signal via onResourceSourceChanged")
-      resourceSource.resourceReceived.connect(onResourceReceived)
-      isConnected = true
-      iface.logMessage("Signal connected via property watcher")
-    }
-  }
-
-  function createFeatureFromWKT(wkt, targetLayerName){
-    iface.logMessage("createFeatureFromWKT called with layer: " + targetLayerName)
-    iface.logMessage("WKT: " + wkt)
-    let targetLayer = qgisProject.mapLayersByName(targetLayerName)[0]
-    if (!targetLayer) {
-      iface.logMessage("ERROR: Layer not found: " + targetLayerName)
-      iface.mainWindow().displayToast("No layer called " + targetLayerName + " could be found!")
-      return
-    }
-    iface.logMessage("Layer found, creating geometry...")
-    let geometry = GeometryUtils.createGeometryFromWkt(wkt)
-    iface.logMessage("Geometry created: " + geometry)
-    let feature = FeatureUtils.createFeature(targetLayer, geometry)
-    iface.logMessage("Feature created, opening form...")
-    dashBoard.activeLayer = targetLayer
-    overlayFeatureFormDrawer.featureModel.feature = feature
-    overlayFeatureFormDrawer.state = "Add"
-    overlayFeatureFormDrawer.open()
-    iface.logMessage("Feature form opened")
-  }
-
-  function buttonClicked(){
-    iface.logMessage("buttonClicked started")
-
-    // Disconnect previous if any
-    if (resourceSource && isConnected) {
-      iface.logMessage("Disconnecting previous resourceSource connection")
-      resourceSource.resourceReceived.disconnect(onResourceReceived)
-      isConnected = false
-    }
-
-    var filepath = "images/img_" + Date.now() + ".jpg"
-    iface.logMessage("Requesting gallery picture, filepath: " + filepath)
-    iface.logMessage("Project home path: " + qgisProject.homePath)
-
-    // Assignment triggers onResourceSourceChanged which connects the signal
-    resourceSource = platformUtilities.getGalleryPicture(qgisProject.homePath + '/', filepath, plugin)
-    iface.logMessage("resourceSource after getGalleryPicture: " + resourceSource)
-    isProcessing = false
-  }
-
-  function onResourceReceived(path) {
-    iface.logMessage("=== onResourceReceived FIRED === path: " + path)
-
-    // Disconnect after receiving
-    if (resourceSource && isConnected) {
-      iface.logMessage("Disconnecting signal after receive")
-      resourceSource.resourceReceived.disconnect(onResourceReceived)
-      isConnected = false
-    }
-
-    if (!path) {
-      iface.logMessage("ERROR: path is empty or null")
-      iface.mainWindow().displayToast(qsTr("No image path received"))
-      return
-    }
-
-    var fullPath = qgisProject.homePath + "/" + path
-    iface.logMessage("Full image path: " + fullPath)
-
-    expressionEvaluator.expressionText = "geom_to_wkt( make_point( exif('" + fullPath + "' , 'Exif.GPSInfo.GPSLongitude'), exif('" + fullPath + "' , 'Exif.GPSInfo.GPSLatitude')))"
-    iface.logMessage("Expression set, evaluating...")
-
-    var result = expressionEvaluator.evaluate()
-    iface.logMessage("Expression result: " + result)
-
-    if (result === "" || result === null || result === undefined) {
-      iface.mainWindow().displayToast(qsTr("No Coordinates provided - no EXIF error"))
-      iface.logMessage("No Coordinates provided - EXIF result was empty")
-      iface.logMessage("Full path used for EXIF: " + fullPath)
-      return
-    }
-
-    iface.logMessage("Valid result, calling createFeatureFromWKT...")
-    createFeatureFromWKT(result, selectedLayer || "Schwammerl")
-  }
-
-  function getLayerNames() {
-    iface.logMessage("getLayerNames called")
-    var layerTree = dashBoard.layerTree
-    let layerNames = []
-
-    for (let i = 0; i < layerTree.rowCount(); i++) {
-      let index = layerTree.index(i, 0)
-      layerNames.push(layerTree.data(index, Qt.DisplayRole))
-    }
-    iface.logMessage("Layer names found: " + layerNames.join(", "))
-    return layerNames
+  // The chosen target layer is remembered across sessions
+  Settings {
+    id: settings
+    category: "qfield-image-based-feature-creation"
+    property string layerId: ""
   }
 
   ExpressionEvaluator {
@@ -120,9 +40,196 @@ Item {
     project: qgisProject
   }
 
+  // The picker result arrives asynchronously (on Android after the external
+  // picker activity returns), so the handler is bound declaratively to
+  // whatever resource source is currently pending.
+  Connections {
+    target: plugin.resourceSource
+    function onResourceReceived(path) {
+      plugin.resourceSource = null;
+      plugin.handleImage(path);
+    }
+  }
+
   Component.onCompleted: {
-    iface.logMessage("Plugin loaded successfully")
-    iface.addItemToPluginsToolbar(pluginButton)
+    iface.addItemToPluginsToolbar(pluginButton);
+  }
+
+  function log(message) {
+    iface.logMessage("[Image Feature Creator] " + message);
+  }
+
+  function toast(message, type) {
+    iface.mainWindow().displayToast(message, type);
+  }
+
+  function isPointLayer(layer) {
+    return layer && typeof layer.geometryType === "function" && layer.geometryType() === Qgis.GeometryType.Point;
+  }
+
+  // Returns all point layers of the current project as [{ id, name }], sorted by name
+  function pointLayers() {
+    const layers = ProjectUtils.mapLayers(qgisProject);
+    const result = [];
+    for (const id in layers) {
+      if (isPointLayer(layers[id])) {
+        result.push({
+            "id": id,
+            "name": layers[id].name
+          });
+      }
+    }
+    result.sort((a, b) => a.name.localeCompare(b.name));
+    return result;
+  }
+
+  // Returns the configured target layer, or null if unset or not in the current project
+  function targetLayer() {
+    if (settings.layerId === "") {
+      return null;
+    }
+    const layer = qgisProject.mapLayer(settings.layerId);
+    return isPointLayer(layer) ? layer : null;
+  }
+
+  // Opens the platform's image picker. The result is delivered to handleImage().
+  function pickImage() {
+    if (!qgisProject || !qgisProject.homePath) {
+      toast(qsTr("Please open a project first"), 'warning');
+      return;
+    }
+
+    platformUtilities.requestStoragePermission();
+
+    const prefix = qgisProject.homePath + '/';
+    // {filename} is replaced by QField with the original file name, keeping its extension
+    const filePath = imageFolder + '/img_' + Date.now() + '_{filename}';
+
+    if (Qt.platform.os === "android" && typeof platformUtilities.getFile === "function") {
+      // Android's gallery picker (the system photo picker) removes the GPS location
+      // from EXIF metadata for privacy reasons, so the generic document picker is
+      // used instead, which hands over the original file.
+      resourceSource = platformUtilities.getFile(prefix, filePath, "image/*", plugin);
+    } else {
+      resourceSource = platformUtilities.getGalleryPicture(prefix, filePath, plugin);
+    }
+
+    if (!resourceSource) {
+      // Desktop file dialogs return no resource source when cancelled
+      log("Image picker was cancelled or could not be opened");
+    }
+  }
+
+  // Called with the image path relative to the project folder, or an empty
+  // string if the image could not be retrieved.
+  function handleImage(path) {
+    if (!path) {
+      toast(qsTr("No image received"), 'warning');
+      return;
+    }
+
+    const imagePath = qgisProject.homePath + '/' + path;
+    log("Received image: " + imagePath);
+    if (!FileUtils.fileExists(imagePath)) {
+      toast(qsTr("The selected image could not be copied into the project folder"), 'error');
+      return;
+    }
+
+    const position = readExifPosition(imagePath);
+    if (!position) {
+      toast(qsTr("The selected image has no GPS coordinates in its EXIF metadata"), 'warning');
+      return;
+    }
+    log("EXIF position: lon " + position.x + ", lat " + position.y + (isNaN(position.z) ? "" : ", alt " + position.z));
+
+    const layer = targetLayer();
+    if (!layer) {
+      toast(qsTr("The target layer is no longer available, please choose another one"), 'warning');
+      layerSelectionDialog.open();
+      return;
+    }
+
+    openFeatureForm(layer, position);
+  }
+
+  // Reads the GPS position (WGS 84) of an image. Returns { x, y, z } with z being
+  // NaN when no altitude is stored, or null if the image has no usable position.
+  function readExifPosition(imagePath) {
+    // Escape the path the same way QgsExpression::quotedString() does
+    const quotedPath = "'" + imagePath.replace(/\\/g, "\\\\").replace(/'/g, "\\'") + "'";
+    // exif_geotag() takes the N/S and E/W references into account, unlike reading
+    // the raw Exif.GPSInfo.GPSLatitude/GPSLongitude tags with exif()
+    expressionEvaluator.expressionText = "with_variable('geotag', exif_geotag(" + quotedPath + "), " + "if(@geotag IS NULL, '', concat(x(@geotag), ';', y(@geotag), ';', coalesce(z(@geotag), ''))))";
+
+    const result = expressionEvaluator.evaluate();
+    if (result === undefined || result === null || String(result) === "") {
+      log("No EXIF geotag found in " + imagePath);
+      return null;
+    }
+
+    const parts = String(result).split(';');
+    const x = parseFloat(parts[0]);
+    const y = parseFloat(parts[1]);
+    const z = parts.length > 2 && parts[2] !== "" ? parseFloat(parts[2]) : NaN;
+
+    if (!isFinite(x) || !isFinite(y) || Math.abs(x) > 180 || Math.abs(y) > 90) {
+      log("Invalid EXIF geotag '" + result + "' in " + imagePath);
+      return null;
+    }
+    if (x === 0 && y === 0) {
+      // Some cameras write 0/0 when they had no GPS fix
+      log("EXIF geotag is 0/0, treating it as missing");
+      return null;
+    }
+    return {
+      "x": x,
+      "y": y,
+      "z": z
+    };
+  }
+
+  // Builds a WKT point in the layer's CRS and geometry type (single/multi, Z, M)
+  function pointWkt(layer, position) {
+    const point = GeometryUtils.reprojectPoint(GeometryUtils.point(position.x, position.y, position.z), CoordinateReferenceSystemUtils.wgs84Crs(), layer.crs);
+    if (!point || !isFinite(point.x) || !isFinite(point.y)) {
+      return "";
+    }
+
+    const type = layer.wkbType();
+    const isMulti = [Qgis.WkbType.MultiPoint, Qgis.WkbType.MultiPointZ, Qgis.WkbType.MultiPointM, Qgis.WkbType.MultiPointZM, Qgis.WkbType.MultiPoint25D].includes(type);
+    const hasZ = [Qgis.WkbType.PointZ, Qgis.WkbType.PointZM, Qgis.WkbType.Point25D, Qgis.WkbType.MultiPointZ, Qgis.WkbType.MultiPointZM, Qgis.WkbType.MultiPoint25D].includes(type);
+    const hasM = [Qgis.WkbType.PointM, Qgis.WkbType.PointZM, Qgis.WkbType.MultiPointM, Qgis.WkbType.MultiPointZM].includes(type);
+
+    let coordinates = point.x + " " + point.y;
+    if (hasZ) {
+      coordinates += " " + (isFinite(point.z) ? point.z : 0);
+    }
+    if (hasM) {
+      coordinates += " 0";
+    }
+    const dimension = (hasZ ? "Z" : "") + (hasM ? "M" : "");
+    return (isMulti ? "MultiPoint" : "Point") + (dimension ? " " + dimension : "") + (isMulti ? " ((" + coordinates + "))" : " (" + coordinates + ")");
+  }
+
+  function openFeatureForm(layer, position) {
+    const wkt = pointWkt(layer, position);
+    if (wkt === "") {
+      toast(qsTr("The image position could not be transformed into the layer's CRS"), 'error');
+      return;
+    }
+    log("Creating feature in '" + layer.name + "' at " + wkt);
+
+    const geometry = GeometryUtils.createGeometryFromWkt(wkt);
+    if (!geometry || geometry.isNull) {
+      toast(qsTr("Could not create a geometry from the image position"), 'error');
+      return;
+    }
+
+    // The feature form's model follows the dashboard's active layer
+    dashBoard.activeLayer = layer;
+    overlayFeatureFormDrawer.featureModel.feature = FeatureUtils.createFeature(layer, geometry);
+    overlayFeatureFormDrawer.state = "Add";
+    overlayFeatureFormDrawer.open();
   }
 
   QfToolButton {
@@ -131,69 +238,64 @@ Item {
     iconColor: Theme.mainColor
     bgcolor: Theme.darkGray
     round: true
+
     onClicked: {
-      iface.logMessage("Plugin button clicked, selectedLayer: " + selectedLayer)
-      if (selectedLayer == "") {
-        iface.logMessage("No layer selected, opening layer selection dialog")
-        layerSelectionDialog.open()
+      if (plugin.targetLayer()) {
+        plugin.pickImage();
       } else {
-        iface.logMessage("Layer already selected: " + selectedLayer + ", proceeding to image picker")
-        isProcessing = true
-        buttonClicked()
+        layerSelectionDialog.open();
       }
     }
-    onPressAndHold: {
-      iface.logMessage("Button press and hold, isProcessing: " + isProcessing)
-      if (!isProcessing) {
-        layerSelectionDialog.open()
-      }
-    }
+    onPressAndHold: layerSelectionDialog.open()
   }
 
   Dialog {
     id: layerSelectionDialog
     parent: iface.mainWindow().contentItem
-    visible: false
     modal: true
     font: Theme.defaultFont
-    standardButtons: Dialog.Ok | Dialog.Cancel
     title: qsTr("Layer Selection")
+    width: Math.min(parent.width - 40, 400)
     x: (parent.width - width) / 2
     y: (parent.height - height) / 2
+    standardButtons: comboBoxLayers.count > 0 ? Dialog.Ok | Dialog.Cancel : Dialog.Cancel
 
     onAboutToShow: {
-      iface.logMessage("Layer selection dialog opening")
-      var layerNames = getLayerNames()
-      comboBoxLayers.model = layerNames
-      iface.logMessage("ComboBox populated with " + layerNames.length + " layers")
-    }
-
-    ColumnLayout {
-      spacing: 10
-      Label {
-        id: labelSelection
-        wrapMode: Text.Wrap
-        text: qsTr("Layer for Image-based Feature Creation")
-        font: Theme.defaultFont
-      }
-      ComboBox {
-        id: comboBoxLayers
-        Layout.fillWidth: true
-        model: []
-      }
+      const layers = plugin.pointLayers();
+      comboBoxLayers.model = layers;
+      const currentIndex = layers.findIndex(layer => layer.id === settings.layerId);
+      comboBoxLayers.currentIndex = currentIndex >= 0 ? currentIndex : 0;
     }
 
     onAccepted: {
-      selectedLayer = comboBoxLayers.currentText
-      iface.logMessage("Layer selected: " + selectedLayer)
-      iface.mainWindow().displayToast(qsTr("Layer '%1' chosen for image-based feature creation!").arg(comboBoxLayers.currentText))
-      iface.logMessage("Proceeding to image picker after layer selection")
-      isProcessing = true
-      buttonClicked()
+      const layer = comboBoxLayers.model[comboBoxLayers.currentIndex];
+      if (!layer) {
+        return;
+      }
+      settings.layerId = layer.id;
+      plugin.toast(qsTr("Layer '%1' chosen for image-based feature creation").arg(layer.name), 'info');
+      plugin.pickImage();
     }
 
-    onRejected: {
-      iface.logMessage("Layer selection dialog cancelled")
+    ColumnLayout {
+      anchors.fill: parent
+      spacing: 10
+
+      Label {
+        Layout.fillWidth: true
+        wrapMode: Text.Wrap
+        font: Theme.defaultFont
+        text: comboBoxLayers.count > 0 ? qsTr("Point layer for image-based feature creation") : qsTr("This project has no point layers.")
+      }
+
+      ComboBox {
+        id: comboBoxLayers
+        Layout.fillWidth: true
+        visible: count > 0
+        textRole: "name"
+        valueRole: "id"
+        model: []
+      }
     }
   }
 }
