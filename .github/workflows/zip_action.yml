@@ -20,7 +20,7 @@ jobs:
         with:
           filename: qfield-image-based-feature-creation-plugin.zip
           path: .
-          exclusions: '*.git* .git* .github* teaser.gif *.zip'
+          exclusions: '*.git* .git* .github* teaser.gif qrcode.svg *.zip'
       
       - name: Upload Zip Archive
         uses: actions/upload-artifact@v4

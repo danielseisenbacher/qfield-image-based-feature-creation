@@ -12,6 +12,10 @@ This plugin enables a delayed approach to field mapping by using image metadata.
 2. **Install Plugin:**
    - See https://docs.qfield.org/how-to/plugins/
    - Using url method:<br>https://github.com/danielseisenbacher/qfield-image-based-feature-creation/releases/download/latest/qfield-image-based-feature-creation-plugin.zip
+   - Or scan the QR code: in QField go to *Settings → Plugins → Install plugin from URL*, tap the QR code icon next to the URL field and scan:
+
+     <img src="qrcode.svg" alt="QR code for the plugin download URL" width="220">
+
 
 ## Usage
 
